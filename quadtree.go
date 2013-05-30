@@ -6,6 +6,7 @@ package spatial
 
 type Seekable interface {
 	Position() Point
+	PreviousPosition() Point
 }
 
 type Seeker interface {
@@ -17,12 +18,14 @@ type Seeker interface {
 // Constructor
 //
 
-func MakeQuadtree(depth, max int, bounds Rectangle) *Quadtree {
+func MakeQuadtree(depth, min, max int, bounds Rectangle) *Quadtree {
 	return &Quadtree{
-		Depth:  depth,
-		Max:    max,
-		Bounds: bounds,
-		Leaf:   true,
+		Depth:   depth,
+		Min:     min,
+		Max:     max,
+		Bounds:  bounds,
+		Leaf:    true,
+		Objects: make([]Seekable, 0),
 	}
 }
 
@@ -32,7 +35,7 @@ func MakeQuadtree(depth, max int, bounds Rectangle) *Quadtree {
 
 type Quadtree struct {
 	Depth    int
-	Max      int
+	Min, Max int
 	Bounds   Rectangle
 	Objects  []Seekable
 	Subtrees [4]*Quadtree
@@ -104,6 +107,82 @@ func (q *Quadtree) Add(obj Seekable) {
 	}
 }
 
+func (q *Quadtree) Remove(sk Seekable) {
+	//delete the object from our local list
+	for idx, qo := range q.Objects {
+		if sk != qo {
+			continue
+		}
+
+		//do the delete
+		q.Objects = append(q.Objects[:idx], q.Objects[idx+1:]...)
+		break
+	}
+
+	//one thing to keep in mind here is that a quadtree shouldn't
+	//ever collapse itself because it can't know if it's siblings are
+	//also ready to collapse.  only a parent can collapse it's children.
+
+	if !q.Leaf {
+		for _, subtree := range q.Subtrees {
+			if !subtree.Bounds.ContainsPoint(sk.Position()) {
+				continue
+			}
+
+			subtree.Remove(sk)
+
+			//TODO: a way to allow the root node to collapse it's children.
+
+			//if the subtree that we just removed an object from has 
+			//dropped below the minimum, and also has children, collapse it
+			if !subtree.Leaf && subtree.Min > len(subtree.Objects) {
+				subtree.Collapse()
+			}
+		}
+	}
+}
+
+func (q *Quadtree) Update(sk Seekable) {
+	//we shouldn't reach the leaf nodes for this
+	//operation, unless the root node is a leaf
+	//in which case we wouldn't do anything
+	if q.Leaf {
+		return
+	}
+
+	//we're going to check to see if at any point the
+	//new position diverges from the old one.
+	var currentSubtree, nextSubtree *Quadtree
+
+	for _, subtree := range q.Subtrees {
+		//current
+		if subtree.Bounds.ContainsPoint(sk.Position()) {
+			currentSubtree = subtree
+		}
+
+		//next
+		if subtree.Bounds.ContainsPoint(sk.PreviousPosition()) {
+			nextSubtree = subtree
+		}
+
+		if currentSubtree != nil && nextSubtree != nil {
+			break
+		}
+	}
+
+	//if they've diverged, do a remove/add, otherwise
+	//go down the tree further (assuming we're not at the bottom)
+	if currentSubtree != nextSubtree {
+		currentSubtree.Remove(sk)
+		nextSubtree.Add(sk)
+	} else if !currentSubtree.Leaf {
+		currentSubtree.Update(sk)
+	}
+
+	//turns out the new position is in the
+	//same leaf as before.  we do nothing.
+}
+
 func (q *Quadtree) Divide() {
 	//log.Printf("%vDIVIDE: %v", strings.Repeat("-", q.Depth), q.Bounds)
 
@@ -114,28 +193,28 @@ func (q *Quadtree) Divide() {
 	depth := q.Depth + 1
 
 	//top left
-	q.Subtrees[0] = MakeQuadtree(depth, q.Max, Rectangle{
+	q.Subtrees[0] = MakeQuadtree(depth, q.Min, q.Max, Rectangle{
 		Width:  width,
 		Height: height,
 		Center: Point{q.Bounds.Center.X - width/2, q.Bounds.Center.Y + height/2},
 	})
 
 	//top right
-	q.Subtrees[1] = MakeQuadtree(depth, q.Max, Rectangle{
+	q.Subtrees[1] = MakeQuadtree(depth, q.Min, q.Max, Rectangle{
 		Width:  width,
 		Height: height,
 		Center: Point{q.Bounds.Center.X + width/2, q.Bounds.Center.Y + height/2},
 	})
 
 	//bottom left
-	q.Subtrees[2] = MakeQuadtree(depth, q.Max, Rectangle{
+	q.Subtrees[2] = MakeQuadtree(depth, q.Min, q.Max, Rectangle{
 		Width:  width,
 		Height: height,
 		Center: Point{q.Bounds.Center.X - width/2, q.Bounds.Center.Y - height/2},
 	})
 
 	//bottom right
-	q.Subtrees[3] = MakeQuadtree(depth, q.Max, Rectangle{
+	q.Subtrees[3] = MakeQuadtree(depth, q.Min, q.Max, Rectangle{
 		Width:  width,
 		Height: height,
 		Center: Point{q.Bounds.Center.X + width/2, q.Bounds.Center.Y - height/2},
@@ -150,5 +229,13 @@ func (q *Quadtree) Divide() {
 			subtree.Add(obj)
 			break
 		}
+	}
+}
+
+func (q *Quadtree) Collapse() {
+	q.Leaf = true
+
+	for idx, _ := range q.Subtrees {
+		q.Subtrees[idx] = nil
 	}
 }
