@@ -43,65 +43,49 @@ type Quadtree struct {
 }
 
 func (q *Quadtree) Query(sk Seeker) []Seekable {
-	if q.Leaf {
-		return q.QuerySelf(sk)
-	}
-
-	return q.QuerySubtrees(sk)
-}
-
-func (q *Quadtree) QuerySelf(sk Seeker) []Seekable {
-	//log.Printf("%vQUERY SELF: %v", strings.Repeat("-", q.Depth), q.Bounds)
-
 	//this will be a list of objects that are contained by the sk object
 	results := make([]Seekable, 0)
 
-	//check each point to see if it's contained by our sk object
-	for _, obj := range q.Objects {
-		if !sk.ContainsPoint(obj.Position()) {
-			continue
+	if q.Leaf {
+		//check each point to see if it's contained by our sk object
+		for _, obj := range q.Objects {
+			if !sk.ContainsPoint(obj.Position()) {
+				continue
+			}
+
+			results = append(results, obj)
 		}
+	} else {
+		//dispatch the sk to any relevant subtrees
+		for _, subtree := range q.Subtrees {
+			//our search radius doesn't intersect this subtree, skip it
+			if !sk.IntersectsRectangle(subtree.Bounds) {
+				//log.Printf("%vIGNORING SUBTREE: %v", strings.Repeat("-", subtree.Depth), subtree.Bounds)
+				continue
+			}
 
-		results = append(results, obj)
-	}
-
-	return results
-}
-
-func (q *Quadtree) QuerySubtrees(sk Seeker) []Seekable {
-	//log.Printf("%vQUERY SUBTREE: %v", strings.Repeat("-", q.Depth), q.Bounds)
-
-	results := make([]Seekable, 0)
-
-	//dispatch the sk to any relevant subtrees
-	for _, subtree := range q.Subtrees {
-		//our search radius doesn't intersect this subtree, skip it
-		if !sk.IntersectsRectangle(subtree.Bounds) {
-			//log.Printf("%vIGNORING SUBTREE: %v", strings.Repeat("-", subtree.Depth), subtree.Bounds)
-			continue
-		}
-
-		//log.Printf("%vINVESTIGATING SUBTREE: %v", strings.Repeat("-", subtree.Depth), subtree.Bounds)
-		for _, result := range subtree.Query(sk) {
-			results = append(results, result)
+			//log.Printf("%vINVESTIGATING SUBTREE: %v", strings.Repeat("-", subtree.Depth), subtree.Bounds)
+			for _, result := range subtree.Query(sk) {
+				results = append(results, result)
+			}
 		}
 	}
 
 	return results
 }
 
-func (q *Quadtree) Add(obj Seekable) {
-	q.Objects = append(q.Objects, obj)
+func (q *Quadtree) Add(sk Seekable) {
+	q.Objects = append(q.Objects, sk)
 
 	if q.Leaf && len(q.Objects) > q.Max {
 		q.Divide()
 	} else if !q.Leaf {
 		for _, subtree := range q.Subtrees {
-			if !subtree.Bounds.ContainsPoint(obj.Position()) {
+			if !subtree.Bounds.ContainsPoint(sk.Position()) {
 				continue
 			}
 
-			subtree.Add(obj)
+			subtree.Add(sk)
 			break
 		}
 	}
@@ -133,7 +117,7 @@ func (q *Quadtree) Remove(sk Seekable) {
 
 			//TODO: a way to allow the root node to collapse it's children.
 
-			//if the subtree that we just removed an object from has 
+			//if the subtree that we just removed an object from has
 			//dropped below the minimum, and also has children, collapse it
 			if !subtree.Leaf && subtree.Min > len(subtree.Objects) {
 				subtree.Collapse()
